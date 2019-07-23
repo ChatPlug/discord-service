@@ -22,7 +22,11 @@ type DiscordServiceConfiguration struct {
 
 func (ds *DiscordService) Startup(args []string) {
 	ds.client = &ChatPlugClient{}
-	ds.client.Connect(args[1], "http://localhost:2137/query", "ws://localhost:2137/query")
+	ds.client.Connect(
+		os.Getenv("INSTANCE_ID"),
+		os.Getenv("HTTP_ENDPOINT"),
+		os.Getenv("WS_ENDPOINT"),
+	)
 
 	if !ds.IsConfigured() {
 		config := ds.client.AwaitConfiguration(ds.GetConfigurationSchema())
