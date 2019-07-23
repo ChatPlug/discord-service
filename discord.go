@@ -140,7 +140,7 @@ func (ds *DiscordService) GetConfigurationSchema() []ConfigurationField {
 }
 
 func (ds *DiscordService) GetConfiguration() (*DiscordServiceConfiguration, error) {
-	file, err := ioutil.ReadFile("config.json")
+	file, err := ioutil.ReadFile("config." + ds.client.instanceID + ".json")
 
 	if err != nil {
 		return nil, err
@@ -164,11 +164,11 @@ func (ds *DiscordService) SaveConfiguration(conf []string) {
 
 	file, _ := json.MarshalIndent(&confStruct, "", " ")
 
-	_ = ioutil.WriteFile("config.json", file, 0644)
+	_ = ioutil.WriteFile("config."+ds.client.instanceID+".json", file, 0644)
 }
 
 func (ds *DiscordService) IsConfigured() bool {
-	if _, err := os.Stat("config.json"); os.IsNotExist(err) {
+	if _, err := os.Stat("config." + ds.client.instanceID + ".json"); os.IsNotExist(err) {
 		return false
 	}
 	return true
