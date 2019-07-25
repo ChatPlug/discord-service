@@ -76,12 +76,14 @@ func (ds *DiscordService) Startup(args []string) {
 			webhook, _ = ds.discordClient.WebhookCreate(msg.TargetThreadID, "ChatPlug "+channel.Name, "https://i.imgur.com/l2QP9Go.png")
 		}
 
-		url := fmt.Sprintf("https://discordapp.com/webhooks/%s/%s", webhook.ID, webhook.Token)
+		url := fmt.Sprintf("https://discordapp.com/api/webhooks/%s/%s", webhook.ID, webhook.Token)
 		payload, _ := json.Marshal(&WebhookPayload{
 			Username:  msg.Message.Author.Username,
 			AvatarURL: msg.Message.Author.AvatarURL,
 			Content:   msg.Message.Body,
 		})
+
+		fmt.Println("Sending a message to the webhook")
 
 		// http://polyglot.ninja/golang-making-http-requests/
 		var body bytes.Buffer
@@ -97,53 +99,48 @@ func (ds *DiscordService) Startup(args []string) {
 			log.Fatalln(err)
 		}
 
+		fmt.Println("Wrote JSON payload")
+
 		for _, attachment := range msg.Message.Attachments {
-			filePath, err := DownloadFile(attachment.SourceURL)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			file, err := os.Open(filePath)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			defer file.Close()
-
-			filename := path.Base(filePath)
+			filename := path.Base(attachment.SourceURL)
 
 			fileWriter, err := writer.CreateFormFile(filename, filename)
 			if err != nil {
-				log.Fatalln(err)
+				fmt.Println(err)
 			}
 
-			// Copy the actual file content to the field field's writer
-			_, err = io.Copy(fileWriter, file)
-			if err != nil {
-				log.Fatalln(err)
+			if err := DownloadFile(attachment.SourceURL, fileWriter); err != nil {
+				fmt.Println(err)
+				continue
 			}
 		}
+
+		fmt.Println("Wrote attachments")
 
 		writer.Close()
 
 		req, err := http.NewRequest("POST", url, &body)
 		if err != nil {
-			log.Fatalln(err)
+			fmt.Println(err)
 		}
 		// We need to set the content type from the writer, it includes necessary boundary as well
 		req.Header.Set("Content-Type", writer.FormDataContentType())
 
+		fmt.Println("Sending the request")
 		// Do the request
 		client := &http.Client{}
 		response, err := client.Do(req)
 		if err != nil {
-			log.Fatalln(err)
+			fmt.Println(err)
 		}
 
+		fmt.Println("Got response")
 		if response.StatusCode != 204 && response.StatusCode != 200 {
-			log.Fatalln(response.Body)
+			data, err := ioutil.ReadAll(response.Body)
+			if err != nil {
+				fmt.Println(err)
+			}
+			fmt.Println(data)
 		}
 	}
 }
@@ -232,35 +229,26 @@ func (ds *DiscordService) IsConfigured() bool {
 	return true
 }
 
-func DownloadFile(url string) (string, error) {
+func DownloadFile(url string, dst io.Writer) error {
 	filename := path.Base(url)
 
 	head, err := http.Head(url)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if head.ContentLength > (8 * 1024 * 1024) {
-		return "", fmt.Errorf("File %s too big", filename)
+		return fmt.Errorf("File %s too big", filename)
 	}
-
-	dir := os.TempDir()
-	filePath := path.Join(dir, filename)
 
 	// https://golangcode.com/download-a-file-from-a-url/
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 
-	out, err := os.Create(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return filePath, err
+	_, err = io.Copy(dst, resp.Body)
+	return err
 }
 
 func main() {
