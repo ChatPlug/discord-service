@@ -1,19 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"path"
 	"strings"
 
+	"github.com/ChatPlug/client-go"
 	"github.com/bwmarrin/discordgo"
 )
 
 type DiscordService struct {
-	client        *ChatPlugClient
+	client        *gql_client.ChatPlugClient
 	discordClient *discordgo.Session
+}
+
+type WebhookPayload struct {
+	Content   string `json:"content"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 type DiscordServiceConfiguration struct {
@@ -21,7 +33,7 @@ type DiscordServiceConfiguration struct {
 }
 
 func (ds *DiscordService) Startup(args []string) {
-	ds.client = &ChatPlugClient{}
+	ds.client = &gql_client.ChatPlugClient{}
 	ds.client.Connect(
 		os.Getenv("INSTANCE_ID"),
 		os.Getenv("HTTP_ENDPOINT"),
@@ -64,28 +76,74 @@ func (ds *DiscordService) Startup(args []string) {
 			webhook, _ = ds.discordClient.WebhookCreate(msg.TargetThreadID, "ChatPlug "+channel.Name, "https://i.imgur.com/l2QP9Go.png")
 		}
 
-		data := &discordgo.WebhookParams{
-			Content:   msg.Message.Body,
+		url := fmt.Sprintf("https://discordapp.com/webhooks/%s/%s", webhook.ID, webhook.Token)
+		payload, _ := json.Marshal(&WebhookPayload{
 			Username:  msg.Message.Author.Username,
 			AvatarURL: msg.Message.Author.AvatarURL,
+			Content:   msg.Message.Body,
+		})
+
+		// http://polyglot.ninja/golang-making-http-requests/
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+
+		payloadWriter, err := writer.CreateFormField("payload_json")
+		if err != nil {
+			log.Fatalln(err)
 		}
 
-		ds.discordClient.WebhookExecute(webhook.ID, webhook.Token, true, data)
+		_, err = payloadWriter.Write([]byte(payload))
+		if err != nil {
+			log.Fatalln(err)
+		}
 
 		for _, attachment := range msg.Message.Attachments {
-
-			data := &discordgo.WebhookParams{
-				Username:  msg.Message.Author.Username,
-				AvatarURL: msg.Message.Author.AvatarURL,
-				File:      attachment.SourceURL,
-			}
-
-			// url := fmt.Sprintf("https://discordapp.com/webhooks/%s/%s", webhook.ID, webhook.Token)
-
-			err := ds.discordClient.WebhookExecute(webhook.ID, webhook.Token, true, data)
+			filePath, err := DownloadFile(attachment.SourceURL)
 			if err != nil {
 				fmt.Println(err)
+				continue
 			}
+
+			file, err := os.Open(filePath)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			defer file.Close()
+
+			filename := path.Base(filePath)
+
+			fileWriter, err := writer.CreateFormFile(filename, filename)
+			if err != nil {
+				log.Fatalln(err)
+			}
+
+			// Copy the actual file content to the field field's writer
+			_, err = io.Copy(fileWriter, file)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+
+		writer.Close()
+
+		req, err := http.NewRequest("POST", url, &body)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		// We need to set the content type from the writer, it includes necessary boundary as well
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+
+		// Do the request
+		client := &http.Client{}
+		response, err := client.Do(req)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		if response.StatusCode != 204 && response.StatusCode != 200 {
+			log.Fatalln(response.Body)
 		}
 	}
 }
@@ -103,10 +161,10 @@ func (ds *DiscordService) discordMessageCreate(s *discordgo.Session, m *discordg
 		}
 	}
 
-	attachments := make([]*AttachmentInput, 0)
+	attachments := make([]*gql_client.AttachmentInput, 0)
 
 	for _, discordAttachment := range m.Attachments {
-		attachment := AttachmentInput{
+		attachment := gql_client.AttachmentInput{
 			Type:      "IMAGE",
 			OriginID:  discordAttachment.ID,
 			SourceURL: discordAttachment.URL,
@@ -126,9 +184,9 @@ func (ds *DiscordService) discordMessageCreate(s *discordgo.Session, m *discordg
 	)
 }
 
-func (ds *DiscordService) GetConfigurationSchema() []ConfigurationField {
-	conf := make([]ConfigurationField, 0)
-	ques1 := ConfigurationField{
+func (ds *DiscordService) GetConfigurationSchema() []gql_client.ConfigurationField {
+	conf := make([]gql_client.ConfigurationField, 0)
+	ques1 := gql_client.ConfigurationField{
 		Type:         "STRING",
 		Hint:         "Your Discord bot token",
 		DefaultValue: "",
@@ -140,7 +198,7 @@ func (ds *DiscordService) GetConfigurationSchema() []ConfigurationField {
 }
 
 func (ds *DiscordService) GetConfiguration() (*DiscordServiceConfiguration, error) {
-	file, err := ioutil.ReadFile("config." + ds.client.instanceID + ".json")
+	file, err := ioutil.ReadFile("config." + ds.client.InstanceID + ".json")
 
 	if err != nil {
 		return nil, err
@@ -164,14 +222,45 @@ func (ds *DiscordService) SaveConfiguration(conf []string) {
 
 	file, _ := json.MarshalIndent(&confStruct, "", " ")
 
-	_ = ioutil.WriteFile("config."+ds.client.instanceID+".json", file, 0644)
+	_ = ioutil.WriteFile("config."+ds.client.InstanceID+".json", file, 0644)
 }
 
 func (ds *DiscordService) IsConfigured() bool {
-	if _, err := os.Stat("config." + ds.client.instanceID + ".json"); os.IsNotExist(err) {
+	if _, err := os.Stat("config." + ds.client.InstanceID + ".json"); os.IsNotExist(err) {
 		return false
 	}
 	return true
+}
+
+func DownloadFile(url string) (string, error) {
+	filename := path.Base(url)
+
+	head, err := http.Head(url)
+	if err != nil {
+		return "", err
+	}
+	if head.ContentLength > (8 * 1024 * 1024) {
+		return "", fmt.Errorf("File %s too big", filename)
+	}
+
+	dir := os.TempDir()
+	filePath := path.Join(dir, filename)
+
+	// https://golangcode.com/download-a-file-from-a-url/
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return filePath, err
 }
 
 func main() {
