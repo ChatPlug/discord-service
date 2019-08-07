@@ -2,7 +2,7 @@
     "name": "discord",
     "displayName": "Discord service",
     "description": "A discord service",
-    "entrypoint": "discord",
+    "entrypoint": "discord-service",
     "type": "executable",
     "version": "0.0.0"
 }

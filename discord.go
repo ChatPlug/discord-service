@@ -13,12 +13,12 @@ import (
 	"path"
 	"strings"
 
-	"github.com/ChatPlug/client-go"
+	client "github.com/ChatPlug/client-go"
 	"github.com/bwmarrin/discordgo"
 )
 
 type DiscordService struct {
-	client        *gql_client.ChatPlugClient
+	client        *client.ChatPlugClient
 	discordClient *discordgo.Session
 }
 
@@ -33,15 +33,15 @@ type DiscordServiceConfiguration struct {
 }
 
 func (ds *DiscordService) Startup(args []string) {
-	ds.client = &gql_client.ChatPlugClient{}
-	ds.client.Connect(
-		os.Getenv("INSTANCE_ID"),
-		os.Getenv("HTTP_ENDPOINT"),
-		os.Getenv("WS_ENDPOINT"),
-	)
+	ds.client = client.NewChatPlugClient(os.Getenv("WS_ENDPOINT"), os.Getenv("HTTP_ENDPOINT"), os.Getenv("ACCESS_TOKEN"))
+	ds.client.Connect()
+	ds.client.SubscribeToNewMessages()
+	defer ds.client.Close()
 
 	if !ds.IsConfigured() {
-		config := ds.client.AwaitConfiguration(ds.GetConfigurationSchema())
+		ds.client.SubscribeToConfigResponses(ds.GetConfigurationSchema())
+
+		config := <- ds.client.ConfigurationRecvChan
 		ds.SaveConfiguration(config.FieldValues)
 	}
 
@@ -54,11 +54,9 @@ func (ds *DiscordService) Startup(args []string) {
 	ds.discordClient, err = discordgo.New("Bot " + serviceConfiguration.BotToken)
 	ds.discordClient.AddHandler(ds.discordMessageCreate)
 
-	ds.discordClient.Open()
-	msgChan := ds.client.SubscribeToNewMessages()
-	defer ds.client.Close()
+	_ = ds.discordClient.Open()
 
-	for msg := range msgChan {
+	for msg := range ds.client.MessagesChan {
 		webhooks, _ := ds.discordClient.ChannelWebhooks(msg.TargetThreadID)
 
 		hasWebhook := false
@@ -158,10 +156,10 @@ func (ds *DiscordService) discordMessageCreate(s *discordgo.Session, m *discordg
 		}
 	}
 
-	attachments := make([]*gql_client.AttachmentInput, 0)
+	attachments := make([]*client.AttachmentInput, 0)
 
 	for _, discordAttachment := range m.Attachments {
-		attachment := gql_client.AttachmentInput{
+		attachment := client.AttachmentInput{
 			Type:      "IMAGE",
 			OriginID:  discordAttachment.ID,
 			SourceURL: discordAttachment.URL,
@@ -181,9 +179,9 @@ func (ds *DiscordService) discordMessageCreate(s *discordgo.Session, m *discordg
 	)
 }
 
-func (ds *DiscordService) GetConfigurationSchema() []gql_client.ConfigurationField {
-	conf := make([]gql_client.ConfigurationField, 0)
-	ques1 := gql_client.ConfigurationField{
+func (ds *DiscordService) GetConfigurationSchema() []client.ConfigurationField {
+	conf := make([]client.ConfigurationField, 0)
+	ques1 := client.ConfigurationField{
 		Type:         "STRING",
 		Hint:         "Your Discord bot token",
 		DefaultValue: "",
@@ -195,7 +193,7 @@ func (ds *DiscordService) GetConfigurationSchema() []gql_client.ConfigurationFie
 }
 
 func (ds *DiscordService) GetConfiguration() (*DiscordServiceConfiguration, error) {
-	file, err := ioutil.ReadFile("config." + ds.client.InstanceID + ".json")
+	file, err := ioutil.ReadFile("config." + ds.client.GQLClient.Headers.AccessToken + ".json")
 
 	if err != nil {
 		return nil, err
@@ -219,11 +217,11 @@ func (ds *DiscordService) SaveConfiguration(conf []string) {
 
 	file, _ := json.MarshalIndent(&confStruct, "", " ")
 
-	_ = ioutil.WriteFile("config."+ds.client.InstanceID+".json", file, 0644)
+	_ = ioutil.WriteFile("config."+ds.client.GQLClient.Headers.AccessToken+".json", file, 0644)
 }
 
 func (ds *DiscordService) IsConfigured() bool {
-	if _, err := os.Stat("config." + ds.client.InstanceID + ".json"); os.IsNotExist(err) {
+	if _, err := os.Stat("config." + ds.client.GQLClient.Headers.AccessToken + ".json"); os.IsNotExist(err) {
 		return false
 	}
 	return true
