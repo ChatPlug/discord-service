@@ -32,29 +32,7 @@ type DiscordServiceConfiguration struct {
 	BotToken string `json:"botToken"`
 }
 
-func (ds *DiscordService) Startup(args []string) {
-	ds.client = client.NewChatPlugClient(os.Getenv("WS_ENDPOINT"), os.Getenv("HTTP_ENDPOINT"), os.Getenv("ACCESS_TOKEN"))
-	ds.client.Connect()
-	ds.client.SubscribeToNewMessages()
-	defer ds.client.Close()
-
-	if !ds.IsConfigured() {
-		ds.client.SubscribeToConfigResponses(ds.GetConfigurationSchema())
-
-		config := <- ds.client.ConfigurationRecvChan
-		ds.SaveConfiguration(config.FieldValues)
-	}
-
-	serviceConfiguration, err := ds.GetConfiguration()
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ds.discordClient, err = discordgo.New("Bot " + serviceConfiguration.BotToken)
-	ds.discordClient.AddHandler(ds.discordMessageCreate)
-
-	_ = ds.discordClient.Open()
+func (ds *DiscordService) handleMessages() {
 
 	for msg := range ds.client.MessagesChan {
 		webhooks, _ := ds.discordClient.ChannelWebhooks(msg.TargetThreadID)
@@ -140,6 +118,53 @@ func (ds *DiscordService) Startup(args []string) {
 			}
 			fmt.Println(data)
 		}
+	}
+}
+
+func (ds *DiscordService) Startup(args []string) {
+	ds.client = client.NewChatPlugClient(os.Getenv("WS_ENDPOINT"), os.Getenv("HTTP_ENDPOINT"), os.Getenv("ACCESS_TOKEN"))
+	ds.client.Connect()
+	ds.client.SubscribeToNewMessages()
+	defer ds.client.Close()
+
+	if !ds.IsConfigured() {
+		ds.client.SubscribeToConfigResponses(ds.GetConfigurationSchema())
+
+		config := <- ds.client.ConfigurationRecvChan
+		ds.SaveConfiguration(config.FieldValues)
+	}
+
+	serviceConfiguration, err := ds.GetConfiguration()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ds.discordClient, err = discordgo.New("Bot " + serviceConfiguration.BotToken)
+	ds.discordClient.AddHandler(ds.discordMessageCreate)
+
+	_ = ds.discordClient.Open()
+	ds.client.SubscribeToSearchRequests()
+
+	go func() {
+		ds.handleMessages()
+	}()
+
+	for searchRequest := range ds.client.SearchRequestsChan {
+		threadResults := make([]*client.SearchThreadInput, 0)
+		for _, guild := range ds.discordClient.State.Guilds {
+			channels, _ := ds.discordClient.GuildChannels(guild.ID)
+			for _, channel := range channels {
+				if len(threadResults) < 30 && (strings.Contains(channel.Name, searchRequest.Query) || strings.Contains(guild.Name, searchRequest.Query)) && channel.Type == discordgo.ChannelTypeGuildText {
+					threadResults = append(threadResults, &client.SearchThreadInput{
+						Name:     guild.Name + " - " +channel.Name,
+						IconURL:  "http://cdn.discordapp.com/icons/" + guild.ID + "/" + guild.Icon +".png",
+						OriginID: channel.ID,
+					})
+				}
+			}
+		}
+		ds.client.SetSearchResponse(searchRequest.Query, threadResults)
 	}
 }
 
