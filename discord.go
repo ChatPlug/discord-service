@@ -130,7 +130,7 @@ func (ds *DiscordService) Startup(args []string) {
 	if !ds.IsConfigured() {
 		ds.client.SubscribeToConfigResponses(ds.GetConfigurationSchema())
 
-		config := <- ds.client.ConfigurationRecvChan
+		config := <-ds.client.ConfigurationRecvChan
 		ds.SaveConfiguration(config.FieldValues)
 	}
 
@@ -157,8 +157,8 @@ func (ds *DiscordService) Startup(args []string) {
 			for _, channel := range channels {
 				if len(threadResults) < 30 && (strings.Contains(channel.Name, searchRequest.Query) || strings.Contains(guild.Name, searchRequest.Query)) && channel.Type == discordgo.ChannelTypeGuildText {
 					threadResults = append(threadResults, &client.SearchThreadInput{
-						Name:     guild.Name + " - " +channel.Name,
-						IconURL:  "http://cdn.discordapp.com/icons/" + guild.ID + "/" + guild.Icon +".png",
+						Name:     guild.Name + " - " + channel.Name,
+						IconURL:  "http://cdn.discordapp.com/icons/" + guild.ID + "/" + guild.Icon + ".png",
 						OriginID: channel.ID,
 					})
 				}
@@ -235,9 +235,13 @@ func (ds *DiscordService) GetConfiguration() (*DiscordServiceConfiguration, erro
 	return &data, nil
 }
 
-func (ds *DiscordService) SaveConfiguration(conf []string) {
-	confStruct := DiscordServiceConfiguration{
-		BotToken: conf[0],
+func (ds *DiscordService) SaveConfiguration(conf []client.ConfigurationFieldResult) {
+	confStruct := DiscordServiceConfiguration{}
+
+	for _, field := range conf {
+		if field.Name == "botToken" {
+			confStruct.BotToken = field.Value
+		}
 	}
 
 	file, _ := json.MarshalIndent(&confStruct, "", " ")
