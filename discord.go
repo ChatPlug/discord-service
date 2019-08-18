@@ -208,6 +208,7 @@ func (ds *DiscordService) GetConfigurationSchema() []client.ConfigurationField {
 	conf := make([]client.ConfigurationField, 0)
 	ques1 := client.ConfigurationField{
 		Type:         "STRING",
+		Name:         "botToken",
 		Hint:         "Your Discord bot token",
 		DefaultValue: "",
 		Optional:     false,
@@ -218,7 +219,7 @@ func (ds *DiscordService) GetConfigurationSchema() []client.ConfigurationField {
 }
 
 func (ds *DiscordService) GetConfiguration() (*DiscordServiceConfiguration, error) {
-	file, err := ioutil.ReadFile("config." + ds.client.GQLClient.Headers.AccessToken + ".json")
+	file, err := ioutil.ReadFile("config." + os.Getenv("INSTANCE_ID") + ".json")
 
 	if err != nil {
 		return nil, err
@@ -246,11 +247,11 @@ func (ds *DiscordService) SaveConfiguration(conf []client.ConfigurationFieldResu
 
 	file, _ := json.MarshalIndent(&confStruct, "", " ")
 
-	_ = ioutil.WriteFile("config."+ds.client.GQLClient.Headers.AccessToken+".json", file, 0644)
+	_ = ioutil.WriteFile("config."+os.Getenv("INSTANCE_ID")+".json", file, 0644)
 }
 
 func (ds *DiscordService) IsConfigured() bool {
-	if _, err := os.Stat("config." + ds.client.GQLClient.Headers.AccessToken + ".json"); os.IsNotExist(err) {
+	if _, err := os.Stat("config." + os.Getenv("INSTANCE_ID") + ".json"); os.IsNotExist(err) {
 		return false
 	}
 	return true
